@@ -656,7 +656,7 @@ def display_tab(df, available_years, default_years):
     fig_channel.update_layout(
         xaxis=dict(
             title="Channel",
-            titlefont=dict(size=14, color="#f0f6fc", family="Inter"),
+            title_font=dict(size=14, color="#f0f6fc", family="Inter"),
             tickfont=dict(size=12, color="#f0f6fc", family="Inter"),
             tickangle=45,
             showgrid=False,
@@ -664,7 +664,7 @@ def display_tab(df, available_years, default_years):
         ),
         yaxis=dict(
             title="Sales (£)",
-            titlefont=dict(size=14, color="#f0f6fc", family="Inter"),
+            title_font=dict(size=14, color="#f0f6fc", family="Inter"),
             tickfont=dict(size=12, color="#f0f6fc", family="Inter"),
             showgrid=True,
             gridcolor='rgba(128,128,128,0.2)',
