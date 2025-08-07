@@ -495,6 +495,15 @@ def display_tab(df, available_years, default_years):
     # 3. Trends Over Time
     st.markdown("#### 📈 Price Range Sales Trends")
     
+    # Add toggle switch for view mode
+    col_toggle, col_spacer = st.columns([1, 3])
+    with col_toggle:
+        view_mode = st.toggle(
+            "📊 Show Percentage View",
+            value=False,
+            help="Toggle between absolute sales values and percentage of total sales by week"
+        )
+    
     # Use cached weekly trends data
     if not weekly_trends.empty:
         weekly_trends['Month_Approx'] = weekly_trends[WEEK_AS_INT_COL].apply(week_to_month)
@@ -502,29 +511,78 @@ def display_tab(df, available_years, default_years):
         # Sort by year and week for proper chronological order
         weekly_trends = weekly_trends.sort_values([CUSTOM_YEAR_COL, WEEK_AS_INT_COL])
         
-        # Add formatted sales values for better tooltip display
-        weekly_trends['Sales_Formatted'] = weekly_trends[SALES_VALUE_GBP_COL].apply(lambda x: f"£{x:,.0f}")
-        
-        fig_trends = px.line(
-            weekly_trends,
-            x='Week_Display',
-            y=SALES_VALUE_GBP_COL,
-            color='Applicable_Price_Range',
-            title='Weekly Sales by Price Range',
-            labels={
-                'Week_Display': 'Week', 
-                SALES_VALUE_GBP_COL: 'Sales (£)',
-                'Applicable_Price_Range': 'Price Range'
-            }
-        )
-        
-        # Update hover template with month information
-        fig_trends.update_traces(
-            hovertemplate="<b>%{fullData.name}</b><br>" +
-                          "<b>Week:</b> %{x}<br>" +
-                          "<b>Sales:</b> £%{y:,.0f}<br>" +
-                          "<extra></extra>"
-        )
+        # Calculate percentage values if needed
+        if view_mode:
+            # Calculate total sales per week across all price ranges
+            weekly_totals = weekly_trends.groupby([CUSTOM_YEAR_COL, WEEK_AS_INT_COL, 'Week_Display'])[SALES_VALUE_GBP_COL].sum().reset_index()
+            weekly_totals.rename(columns={SALES_VALUE_GBP_COL: 'Total_Sales_Week'}, inplace=True)
+            
+            # Merge totals back to main dataframe
+            weekly_trends = weekly_trends.merge(
+                weekly_totals[['Week_Display', 'Total_Sales_Week']], 
+                on='Week_Display', 
+                how='left'
+            )
+            
+            # Calculate percentage
+            weekly_trends['Sales_Percentage'] = (weekly_trends[SALES_VALUE_GBP_COL] / weekly_trends['Total_Sales_Week'] * 100).fillna(0)
+            
+            # Create percentage chart
+            fig_trends = px.line(
+                weekly_trends,
+                x='Week_Display',
+                y='Sales_Percentage',
+                color='Applicable_Price_Range',
+                title='Weekly Sales by Price Range - Percentage View',
+                labels={
+                    'Week_Display': 'Week', 
+                    'Sales_Percentage': 'Sales Percentage (%)',
+                    'Applicable_Price_Range': 'Price Range'
+                }
+            )
+            
+            # Update hover template for percentage view
+            fig_trends.update_traces(
+                hovertemplate="<b>%{fullData.name}</b><br>" +
+                              "<b>Week:</b> %{x}<br>" +
+                              "<b>Percentage:</b> %{y:.1f}%<br>" +
+                              "<b>Sales Value:</b> £%{customdata:,.0f}<br>" +
+                              "<extra></extra>",
+                customdata=weekly_trends[SALES_VALUE_GBP_COL]
+            )
+            
+            y_axis_title = "Sales Percentage (%)"
+            y_axis_range = [0, 100]
+            y_tick_format = ".1f"
+            
+        else:
+            # Add formatted sales values for better tooltip display
+            weekly_trends['Sales_Formatted'] = weekly_trends[SALES_VALUE_GBP_COL].apply(lambda x: f"£{x:,.0f}")
+            
+            fig_trends = px.line(
+                weekly_trends,
+                x='Week_Display',
+                y=SALES_VALUE_GBP_COL,
+                color='Applicable_Price_Range',
+                title='Weekly Sales by Price Range - Absolute Values',
+                labels={
+                    'Week_Display': 'Week', 
+                    SALES_VALUE_GBP_COL: 'Sales (£)',
+                    'Applicable_Price_Range': 'Price Range'
+                }
+            )
+            
+            # Update hover template with month information
+            fig_trends.update_traces(
+                hovertemplate="<b>%{fullData.name}</b><br>" +
+                              "<b>Week:</b> %{x}<br>" +
+                              "<b>Sales:</b> £%{y:,.0f}<br>" +
+                              "<extra></extra>"
+            )
+            
+            y_axis_title = "Sales (£)"
+            y_axis_range = None
+            y_tick_format = ",.0f"
         
         # Create month indicators using vertical lines and top annotations
         unique_weeks = weekly_trends.sort_values(WEEK_AS_INT_COL)[WEEK_AS_INT_COL].unique()
@@ -580,7 +638,7 @@ def display_tab(df, available_years, default_years):
             xaxis_tickangle=45,
             hovermode='x unified',  # This shows all series data in one tooltip
             xaxis_title="Week",
-            yaxis_title="Sales (£)",
+            yaxis_title=y_axis_title,
             annotations=month_markers,
             shapes=month_lines,  # Add the month separator lines
             xaxis=dict(
@@ -589,6 +647,12 @@ def display_tab(df, available_years, default_years):
                 showgrid=True,
                 gridcolor='rgba(128,128,128,0.2)',
                 domain=[0, 1]  # Full width for x-axis
+            ),
+            yaxis=dict(
+                range=y_axis_range,
+                tickformat=y_tick_format,
+                showgrid=True,
+                gridcolor='rgba(128,128,128,0.2)',
             ),
             margin=dict(t=80, b=60, l=60, r=60),  # Extra top margin for month labels
             font=dict(family="Inter", color="#f0f6fc")  # Light font for dark theme
