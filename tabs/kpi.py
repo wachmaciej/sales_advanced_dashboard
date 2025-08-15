@@ -382,6 +382,156 @@ def display_tab(df, available_years, current_year, df_targets=None):
                             )
                 else:
                     st.info("Need at least 2 years of data to show YTD comparison")
+                
+                # === SALES CHANNEL CONTRIBUTION TO YTD REVENUE ===
+                st.markdown("---")
+                st.markdown("### 🏪 Sales Channel Contribution to YTD Revenue")
+                st.markdown("""
+                <p style="color: #64748b; margin-bottom: 1.5rem;">
+                    Breakdown of how each sales channel contributes to year-to-date revenue
+                </p>
+                """, unsafe_allow_html=True)
+                
+                from config import SALES_CHANNEL_COL
+                
+                if SALES_CHANNEL_COL in df.columns:
+                    # Calculate channel contribution for each year
+                    channel_data = {}
+                    
+                    for comp_year in comparison_years:
+                        if comp_year in all_custom_years_in_df:
+                            # Filter data from week 1 to current selected week for this year
+                            ytd_filter = (df[CUSTOM_YEAR_COL] == comp_year) & (df[WEEK_AS_INT_COL] <= current_week_int)
+                            year_data = df[ytd_filter].copy()
+                            
+                            if not year_data.empty:
+                                # Group by sales channel and sum revenue
+                                channel_revenue = year_data.groupby(SALES_CHANNEL_COL)[SALES_VALUE_GBP_COL].sum().reset_index()
+                                channel_revenue = channel_revenue.sort_values(SALES_VALUE_GBP_COL, ascending=False)
+                                
+                                # Calculate percentages
+                                total_revenue = channel_revenue[SALES_VALUE_GBP_COL].sum()
+                                channel_revenue['percentage'] = (channel_revenue[SALES_VALUE_GBP_COL] / total_revenue * 100).round(1)
+                                
+                                # Keep only top 7 channels, combine the rest into "Others"
+                                if len(channel_revenue) > 7:
+                                    top_7 = channel_revenue.head(7).copy()
+                                    others_revenue = channel_revenue.tail(len(channel_revenue) - 7)[SALES_VALUE_GBP_COL].sum()
+                                    others_percentage = (others_revenue / total_revenue * 100).round(1)
+                                    
+                                    # Add "Others" row
+                                    others_row = pd.DataFrame({
+                                        SALES_CHANNEL_COL: ['Others'],
+                                        SALES_VALUE_GBP_COL: [others_revenue],
+                                        'percentage': [others_percentage]
+                                    })
+                                    
+                                    channel_revenue = pd.concat([top_7, others_row], ignore_index=True)
+                                
+                                channel_data[comp_year] = channel_revenue
+                    
+                    if len(channel_data) >= 2:
+                        # Create tabs for each year - sort descending to show 2025 first (default selection)
+                        years_sorted_desc = sorted(channel_data.keys(), reverse=True)
+                        channel_tabs = st.tabs([f"📊 {year} Channel Mix" for year in years_sorted_desc])
+                        
+                        for i, year in enumerate(years_sorted_desc):
+                            with channel_tabs[i]:
+                                channel_revenue = channel_data[year]
+                                
+                                # Create two columns: pie chart and table
+                                chart_col, table_col = st.columns([3, 2])
+                                
+                                with chart_col:
+                                    # Create pie chart for channel contribution
+                                    fig_channel = go.Figure(data=[go.Pie(
+                                        labels=channel_revenue[SALES_CHANNEL_COL],
+                                        values=channel_revenue[SALES_VALUE_GBP_COL],
+                                        hole=0.4,
+                                        marker=dict(
+                                            colors=['#4FC3F7', '#66BB6A', '#FFB74D', '#F06292', '#9575CD', '#26C6DA', '#FFA726'],
+                                            line=dict(color='#21262d', width=2)
+                                        ),
+                                        textinfo='percent+label',
+                                        textposition='outside',
+                                        textfont=dict(size=12, color='#f0f6fc', family='Inter'),
+                                        hovertemplate="<b>%{label}</b><br>" +
+                                                      "Revenue: £%{value:,.0f}<br>" +
+                                                      "Share: %{percent}<br>" +
+                                                      "<extra></extra>",
+                                        pull=[0.05] * len(channel_revenue)
+                                    )])
+                                    
+                                    # Add center text showing total
+                                    total_ytd = channel_revenue[SALES_VALUE_GBP_COL].sum()
+                                    fig_channel.add_annotation(
+                                        text=f"<b>{year} YTD</b><br>{format_currency_int(total_ytd)}",
+                                        x=0.5, y=0.5,
+                                        font_size=14,
+                                        font_color="#f0f6fc",
+                                        font_family="Inter",
+                                        showarrow=False,
+                                        align="center"
+                                    )
+                                    
+                                    fig_channel.update_layout(
+                                        title=dict(
+                                            text=f"<b>🏪 {year} Channel Revenue Mix (YTD W{current_week_int})</b>",
+                                            font=dict(size=16, color="#f0f6fc", family="Inter"),
+                                            x=0.5,
+                                            xanchor='center'
+                                        ),
+                                        showlegend=False,
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        height=700,
+                                        margin=dict(l=40, r=40, t=80, b=80)
+                                    )
+                                    
+                                    st.plotly_chart(fig_channel, use_container_width=True)
+                                
+                                with table_col:
+                                    st.markdown(f"**📋 {year} Channel Performance**")
+                                    
+                                    # Get original channel data (all channels) for the table - use the specific year
+                                    year_filter = (df[CUSTOM_YEAR_COL] == year) & (df[WEEK_AS_INT_COL] <= current_week_int)
+                                    year_specific_data = df[year_filter].copy()
+                                    
+                                    if not year_specific_data.empty:
+                                        original_channel_revenue = year_specific_data.groupby(SALES_CHANNEL_COL)[SALES_VALUE_GBP_COL].sum().reset_index()
+                                        original_channel_revenue = original_channel_revenue.sort_values(SALES_VALUE_GBP_COL, ascending=False)
+                                        total_revenue = original_channel_revenue[SALES_VALUE_GBP_COL].sum()
+                                        original_channel_revenue['percentage'] = (original_channel_revenue[SALES_VALUE_GBP_COL] / total_revenue * 100).round(1)
+                                        
+                                        # Format the data for display
+                                        display_data = original_channel_revenue.copy()
+                                        display_data[SALES_VALUE_GBP_COL] = display_data[SALES_VALUE_GBP_COL].apply(format_currency_int)
+                                        display_data['percentage'] = display_data['percentage'].apply(lambda x: f"{x:.1f}%")
+                                        
+                                        # Rename columns for display
+                                        display_data = display_data.rename(columns={
+                                            SALES_CHANNEL_COL: 'Sales Channel',
+                                            SALES_VALUE_GBP_COL: 'YTD Revenue',
+                                            'percentage': 'Share %'
+                                        })
+                                        
+                                        st.dataframe(
+                                            display_data[['Sales Channel', 'YTD Revenue', 'Share %']],
+                                            use_container_width=True,
+                                            hide_index=True,
+                                            column_config={
+                                                "Sales Channel": st.column_config.TextColumn("🏪 Channel", width="medium"),
+                                                "YTD Revenue": st.column_config.TextColumn("💰 Revenue", width="small"),
+                                                "Share %": st.column_config.TextColumn("📊 Share", width="small")
+                                            }
+                                        )
+                                    else:
+                                        st.warning(f"No data available for {year}")
+                        
+                    else:
+                        st.info("Need channel data from at least 2 years to show detailed channel contribution analysis")
+                else:
+                    st.warning(f"Sales channel column '{SALES_CHANNEL_COL}' not found in data")
 
                 # === ENHANCED CHARTS SECTION ===
                 if len(all_custom_years_in_df) > 1:
