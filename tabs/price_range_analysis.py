@@ -8,7 +8,8 @@ from utils import format_currency, format_currency_int
 from config import (
     SALES_CHANNEL_COL, SALES_VALUE_GBP_COL, DATE_COL, CUSTOM_YEAR_COL, WEEK_AS_INT_COL,
     PRICE_RANGE_UK_COL, PRICE_RANGE_US_COL, UK_CHANNELS, US_CHANNELS, 
-    PRICE_RANGES, LISTING_COL, ORDER_QTY_COL_RAW, PRODUCT_COL
+    PRICE_RANGES, LISTING_COL, ORDER_QTY_COL_RAW, PRODUCT_COL,
+    CUSTOM_WEEK_START_COL
 )
 
 @st.cache_data
@@ -86,18 +87,31 @@ def calculate_range_summary(filtered_df):
 
 @st.cache_data
 def calculate_weekly_trends(filtered_df):
-    """Cache weekly trends calculation."""
-    if WEEK_AS_INT_COL not in filtered_df.columns or CUSTOM_YEAR_COL not in filtered_df.columns:
+    """Cache weekly trends calculation using custom Saturday-Friday weeks (aligned with YOY trends)."""
+    if CUSTOM_WEEK_START_COL not in filtered_df.columns or CUSTOM_YEAR_COL not in filtered_df.columns:
         return pd.DataFrame()
     
-    # Group by year and week for better trend analysis
-    weekly_trends = filtered_df.groupby([CUSTOM_YEAR_COL, WEEK_AS_INT_COL, 'Applicable_Price_Range'])[SALES_VALUE_GBP_COL].sum().reset_index()
+    # Group by custom week start date and year (same as YOY trends for consistency)
+    weekly_trends = filtered_df.groupby([CUSTOM_YEAR_COL, CUSTOM_WEEK_START_COL, 'Applicable_Price_Range'])[SALES_VALUE_GBP_COL].sum().reset_index()
     
-    # Create cleaner week labels showing just week numbers
-    weekly_trends['Week_Display'] = weekly_trends[WEEK_AS_INT_COL].apply(lambda x: f"W{int(x):02d}")
+    # Convert custom week start to week number for display (matching company Saturday-Friday weeks)
+    if not weekly_trends.empty and WEEK_AS_INT_COL in filtered_df.columns:
+        # Get the week number mapping from the original data
+        week_mapping = filtered_df[[CUSTOM_WEEK_START_COL, WEEK_AS_INT_COL]].drop_duplicates()
+        weekly_trends = weekly_trends.merge(week_mapping, on=CUSTOM_WEEK_START_COL, how='left')
+        
+        # Create week display labels with actual Saturday dates (company week start dates)
+        weekly_trends['Week_Display'] = weekly_trends.apply(lambda row: 
+            f"W{int(row[WEEK_AS_INT_COL]):02d} ({row[CUSTOM_WEEK_START_COL].strftime('%Y-%m-%d')})" 
+            if pd.notna(row[WEEK_AS_INT_COL]) and pd.notna(row[CUSTOM_WEEK_START_COL]) 
+            else "W??", axis=1)
+    else:
+        # Fallback if week mapping not available
+        weekly_trends['Week_Display'] = "Week"
+        weekly_trends[WEEK_AS_INT_COL] = 1
     
-    # Sort by year and week for proper chronological order
-    weekly_trends = weekly_trends.sort_values([CUSTOM_YEAR_COL, WEEK_AS_INT_COL])
+    # Sort by year and custom week start date for proper chronological order (Saturday-Friday)
+    weekly_trends = weekly_trends.sort_values([CUSTOM_YEAR_COL, CUSTOM_WEEK_START_COL])
     
     return weekly_trends
 
@@ -144,6 +158,44 @@ def calculate_product_performance(filtered_df):
     product_performance['Product_AOV'] = product_performance['Product_AOV'].fillna(0)
     
     return product_performance
+
+@st.cache_data
+def calculate_weekly_trends_by_listing(filtered_df):
+    """Cache weekly trends calculation by listing with Saturday-Friday weeks."""
+    if (CUSTOM_WEEK_START_COL not in filtered_df.columns or 
+        CUSTOM_YEAR_COL not in filtered_df.columns or 
+        LISTING_COL not in filtered_df.columns):
+        return pd.DataFrame()
+    
+    # Group by custom week start date, year, listing, and price range
+    weekly_trends = filtered_df.groupby([
+        CUSTOM_YEAR_COL, CUSTOM_WEEK_START_COL, LISTING_COL, 'Applicable_Price_Range'
+    ])[SALES_VALUE_GBP_COL].sum().reset_index()
+    
+    # Convert custom week start to week number for display
+    if not weekly_trends.empty and WEEK_AS_INT_COL in filtered_df.columns:
+        # Get the week number mapping from the original data
+        week_mapping = filtered_df[[CUSTOM_WEEK_START_COL, WEEK_AS_INT_COL]].drop_duplicates()
+        weekly_trends = weekly_trends.merge(week_mapping, on=CUSTOM_WEEK_START_COL, how='left')
+        
+        # Create week display labels with actual Saturday dates
+        weekly_trends['Week_Display'] = weekly_trends.apply(lambda row: 
+            f"W{int(row[WEEK_AS_INT_COL]):02d} ({row[CUSTOM_WEEK_START_COL].strftime('%Y-%m-%d')})" 
+            if pd.notna(row[WEEK_AS_INT_COL]) and pd.notna(row[CUSTOM_WEEK_START_COL]) 
+            else "W??", axis=1)
+        
+        # Create combined legend label for listing + price range
+        weekly_trends['Listing_PriceRange'] = weekly_trends[LISTING_COL] + " - " + weekly_trends['Applicable_Price_Range']
+    else:
+        # Fallback if week mapping not available
+        weekly_trends['Week_Display'] = "Week"
+        weekly_trends[WEEK_AS_INT_COL] = 1
+        weekly_trends['Listing_PriceRange'] = "Unknown"
+    
+    # Sort by year and custom week start date for proper chronological order
+    weekly_trends = weekly_trends.sort_values([CUSTOM_YEAR_COL, CUSTOM_WEEK_START_COL])
+    
+    return weekly_trends
 
 def week_to_month(week_num):
     """Helper function to convert week number to month abbreviation."""
@@ -193,7 +245,41 @@ def get_applicable_price_range(channel, df_row):
     else:
         return '0'  # Default for other channels
 
-def display_tab(df, available_years, default_years):
+@st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 minutes
+def get_price_range_data(df, selected_sales_channels, selected_years, selected_listings):
+    """Cache heavy computations for price range analysis to prevent reprocessing on filter changes"""
+    # Create a unique key for this data combination
+    cache_key = f"{hash(tuple(selected_sales_channels))}_{hash(tuple(selected_years))}_{hash(tuple(selected_listings))}"
+    
+    # Filter the dataframe based on selections
+    filtered_df = df[
+        (df[SALES_CHANNEL_COL].isin(selected_sales_channels)) & 
+        (df[CUSTOM_YEAR_COL].isin(selected_years)) &
+        (df[LISTING_COL].isin(selected_listings))
+    ].copy()
+    
+    if filtered_df.empty:
+        return None, cache_key
+    
+    # Perform the heavy price range computations once and cache them
+    price_bins = [0, 5, 10, 15, 25, 50, 100, float('inf')]
+    price_labels = ['£0-£5', '£5-£10', '£10-£15', '£15-£25', '£25-£50', '£50-£100', '£100+']
+    
+    filtered_df = filtered_df.copy()
+    # Calculate unit price from sales value and quantity
+    filtered_df['unit_price_gbp'] = filtered_df[SALES_VALUE_GBP_COL] / filtered_df[ORDER_QTY_COL_RAW]
+    filtered_df['price_range'] = pd.cut(filtered_df['unit_price_gbp'], bins=price_bins, labels=price_labels, right=False)
+    
+    # Group by week and price range for trend analysis
+    weekly_price_trend = filtered_df.groupby([CUSTOM_WEEK_START_COL, 'price_range']).agg({
+        SALES_VALUE_GBP_COL: 'sum',
+        ORDER_QTY_COL_RAW: 'sum'
+    }).reset_index()
+    
+    return weekly_price_trend, cache_key
+
+
+def display_tab(df, available_custom_years, yoy_default_years):
     """Displays the Price Range Analysis tab."""
     
     st.markdown("### 💰 Price Range Analysis")
@@ -246,20 +332,24 @@ def display_tab(df, available_years, default_years):
                 st.info("💡 **Tip:** Channel names must contain 'RA Amazon UK/US' or 'RA Website UK/US'")
                 return
                 
+            # Default to only "RA Amazon US" if available, otherwise all target channels
+            ra_amazon_us_default = [ch for ch in target_channels if 'ra amazon us' in ch.lower()]
+            default_channels = ra_amazon_us_default if ra_amazon_us_default else target_channels
+                
             selected_channels = st.multiselect(
                 "Select channels to analyze", 
                 options=target_channels,
-                default=target_channels,
-                help="Only UK/US channels with price ranges are shown",
+                default=default_channels,
+                help="Only UK/US channels with price ranges are shown. Default shows RA Amazon US.",
                 key="price_range_channels"
             )
         
         with col2:
             # Year filter - default to 2025 only
-            year_2025_default = [2025] if 2025 in available_years else default_years
+            year_2025_default = [2025] if 2025 in available_custom_years else yoy_default_years
             selected_years = st.multiselect(
                 "📅 Years", 
-                options=available_years,
+                options=available_custom_years,
                 default=year_2025_default,
                 help="Select years for analysis"
             )
@@ -495,158 +585,177 @@ def display_tab(df, available_years, default_years):
     # 3. Trends Over Time
     st.markdown("#### 📈 Price Range Sales Trends")
     
-    # Add toggle switch for view mode
-    col_toggle, col_spacer = st.columns([1, 3])
-    with col_toggle:
-        view_mode = st.toggle(
-            "📊 Show Percentage View",
-            value=False,
-            help="Toggle between absolute sales values and percentage of total sales by week"
-        )
+    # Add toggle switches for view mode and breakdown
+    col_toggle1, col_toggle2, col_spacer = st.columns([1, 1, 2])
+    with col_toggle1:
+            view_mode = st.toggle(
+                "📊 Show Percentage View",
+                value=True,
+                help="Toggle between absolute sales values and percentage of total sales by week"
+            )
+    with col_toggle2:
+            listing_breakdown = st.toggle(
+                "📋 Breakdown by Listing",
+                value=False,
+                help="Show price range percentages broken down by individual listings"
+            )
     
-    # Use cached weekly trends data
-    if not weekly_trends.empty:
-        weekly_trends['Month_Approx'] = weekly_trends[WEEK_AS_INT_COL].apply(week_to_month)
+    # Add helpful note for listing breakdown mode
+    if listing_breakdown:
+        st.caption("💡 **Tip:** Listing breakdown shows each listing-price range combination as a separate line, perfect for identifying which specific listings drive sales in each price tier.")
+    
+    # Add view mode indicator
+    if listing_breakdown:
+        st.info("📋 **View Mode:** Breakdown by Listing & Price Range - Shows how each listing performs across different price ranges")
         
+        # Add listing selector for breakdown mode
+        if LISTING_COL in filtered_df.columns:
+            available_listings = sorted(filtered_df[LISTING_COL].dropna().unique())
+            
+            # Default to "Pattern Pants" if available, otherwise first listing
+            default_listing = ["Pattern Pants"] if "Pattern Pants" in available_listings else [available_listings[0]] if available_listings else []
+            
+            st.markdown("**📋 Select Listings to Display:**")
+            selected_listings = st.multiselect(
+                "Choose specific listings for breakdown analysis",
+                options=available_listings,
+                default=default_listing,
+                key="listing_breakdown_selector",
+                help="Select which listings to show in the breakdown chart. Default shows Pattern Pants."
+            )
+            
+            # Buttons section removed
+            
+            if not selected_listings:
+                st.warning("⚠️ Please select at least one listing for breakdown analysis.")
+                selected_listings = default_listing
+        else:
+            selected_listings = []
+            st.warning(f"⚠️ No '{LISTING_COL}' column found for listing breakdown.")
+    else:
+        selected_listings = []  # Not needed for regular mode
+    
+    # Use cached weekly trends data - choose between regular or listing breakdown
+    if listing_breakdown:
+        # Use listing-based weekly trends
+        weekly_trends_listing = calculate_weekly_trends_by_listing(filtered_df)
+        if not weekly_trends_listing.empty and selected_listings:
+            # Filter trends to only include selected listings
+            current_trends = weekly_trends_listing[weekly_trends_listing[LISTING_COL].isin(selected_listings)].copy()
+            
+            if current_trends.empty:
+                st.warning(f"⚠️ No data found for selected listings: {', '.join(selected_listings)}")
+                current_trends = weekly_trends.copy()
+                color_col = 'Applicable_Price_Range'
+                chart_title_suffix = ' by Price Range (Fallback)'
+            else:
+                color_col = 'Listing_PriceRange'
+                chart_title_suffix = f' by Selected Listings & Price Range ({len(selected_listings)} listings)'
+        else:
+            st.warning("⚠️ No listing data available for breakdown analysis")
+            current_trends = weekly_trends.copy()
+            color_col = 'Applicable_Price_Range'
+            chart_title_suffix = ' by Price Range'
+    else:
+        # Use regular price range trends
+        current_trends = weekly_trends.copy()
+        color_col = 'Applicable_Price_Range'
+        chart_title_suffix = ' by Price Range'
+    
+    if not current_trends.empty:
+        current_trends['Month_Approx'] = current_trends[WEEK_AS_INT_COL].apply(week_to_month)
+        # Ensure Week_Display uses the correct Saturday start dates from CUSTOM_WEEK_START_COL
+        # Check if we already have the correct Week_Display from calculate_weekly_trends
+        if 'Week_Display' not in current_trends.columns or current_trends['Week_Display'].isna().any():
+            # Recreate with actual Saturday dates (company week structure)
+            current_trends['Week_Display'] = current_trends.apply(lambda row: 
+                f"W{int(row[WEEK_AS_INT_COL]):02d} ({row[CUSTOM_WEEK_START_COL].strftime('%Y-%m-%d')})" 
+                if pd.notna(row[WEEK_AS_INT_COL]) and pd.notna(row[CUSTOM_WEEK_START_COL]) 
+                else "W??", axis=1)
         # Sort by year and week for proper chronological order
-        weekly_trends = weekly_trends.sort_values([CUSTOM_YEAR_COL, WEEK_AS_INT_COL])
+        current_trends = current_trends.sort_values([CUSTOM_YEAR_COL, WEEK_AS_INT_COL])
         
         # Calculate percentage values if needed
         if view_mode:
-            # Calculate total sales per week across all price ranges
-            weekly_totals = weekly_trends.groupby([CUSTOM_YEAR_COL, WEEK_AS_INT_COL, 'Week_Display'])[SALES_VALUE_GBP_COL].sum().reset_index()
-            weekly_totals.rename(columns={SALES_VALUE_GBP_COL: 'Total_Sales_Week'}, inplace=True)
+            # Calculate total sales per week across all entries
+            if listing_breakdown:
+                # For listing breakdown, calculate total per week across all listings and price ranges
+                weekly_totals = current_trends.groupby([CUSTOM_YEAR_COL, WEEK_AS_INT_COL, 'Week_Display'])[SALES_VALUE_GBP_COL].sum().reset_index()
+            else:
+                # For regular breakdown, calculate total per week across all price ranges
+                weekly_totals = current_trends.groupby([CUSTOM_YEAR_COL, WEEK_AS_INT_COL, 'Week_Display'])[SALES_VALUE_GBP_COL].sum().reset_index()
             
+            weekly_totals.rename(columns={SALES_VALUE_GBP_COL: 'Total_Sales_Week'}, inplace=True)
             # Merge totals back to main dataframe
-            weekly_trends = weekly_trends.merge(
+            current_trends = current_trends.merge(
                 weekly_totals[['Week_Display', 'Total_Sales_Week']], 
                 on='Week_Display', 
                 how='left'
             )
-            
             # Calculate percentage
-            weekly_trends['Sales_Percentage'] = (weekly_trends[SALES_VALUE_GBP_COL] / weekly_trends['Total_Sales_Week'] * 100).fillna(0)
-            
+            current_trends['Sales_Percentage'] = (current_trends[SALES_VALUE_GBP_COL] / current_trends['Total_Sales_Week'] * 100).fillna(0)
             # Create percentage chart
             fig_trends = px.line(
-                weekly_trends,
+                current_trends,
                 x='Week_Display',
                 y='Sales_Percentage',
-                color='Applicable_Price_Range',
-                title='Weekly Sales by Price Range - Percentage View',
+                color=color_col,
+                title=f'Weekly Sales{chart_title_suffix} - Percentage View (Saturday-Friday weeks)',
                 labels={
-                    'Week_Display': 'Week', 
+                    'Week_Display': 'Week (Saturday Start Date)', 
                     'Sales_Percentage': 'Sales Percentage (%)',
-                    'Applicable_Price_Range': 'Price Range'
+                    color_col: 'Legend'
                 }
             )
-            
-            # Update hover template for percentage view
+            # Update hover template for percentage view - with correct Saturday-Friday week dates
             fig_trends.update_traces(
                 hovertemplate="<b>%{fullData.name}</b><br>" +
-                              "<b>Week:</b> %{x}<br>" +
+                              "<b>Week (Sat-Fri):</b> %{x}<br>" +
                               "<b>Percentage:</b> %{y:.1f}%<br>" +
-                              "<b>Sales Value:</b> £%{customdata:,.0f}<br>" +
-                              "<extra></extra>",
-                customdata=weekly_trends[SALES_VALUE_GBP_COL]
+                              "<extra></extra>"
             )
-            
             y_axis_title = "Sales Percentage (%)"
             y_axis_range = [0, 100]
             y_tick_format = ".1f"
-            
         else:
             # Add formatted sales values for better tooltip display
-            weekly_trends['Sales_Formatted'] = weekly_trends[SALES_VALUE_GBP_COL].apply(lambda x: f"£{x:,.0f}")
-            
+            current_trends['Sales_Formatted'] = current_trends[SALES_VALUE_GBP_COL].apply(lambda x: f"£{x:,.0f}")
             fig_trends = px.line(
-                weekly_trends,
+                current_trends,
                 x='Week_Display',
                 y=SALES_VALUE_GBP_COL,
-                color='Applicable_Price_Range',
-                title='Weekly Sales by Price Range - Absolute Values',
+                color=color_col,
+                title=f'Weekly Sales{chart_title_suffix} - Absolute Values (Saturday-Friday weeks)',
                 labels={
-                    'Week_Display': 'Week', 
+                    'Week_Display': 'Week (Saturday Start Date)', 
                     SALES_VALUE_GBP_COL: 'Sales (£)',
-                    'Applicable_Price_Range': 'Price Range'
+                    color_col: 'Legend'
                 }
             )
-            
-            # Update hover template with month information
+            # Update hover template with correct Saturday-Friday week information
             fig_trends.update_traces(
                 hovertemplate="<b>%{fullData.name}</b><br>" +
-                              "<b>Week:</b> %{x}<br>" +
+                              "<b>Week (Sat-Fri):</b> %{x}<br>" +
                               "<b>Sales:</b> £%{y:,.0f}<br>" +
                               "<extra></extra>"
             )
-            
             y_axis_title = "Sales (£)"
             y_axis_range = None
             y_tick_format = ",.0f"
         
-        # Create month indicators using vertical lines and top annotations
-        unique_weeks = weekly_trends.sort_values(WEEK_AS_INT_COL)[WEEK_AS_INT_COL].unique()
-        month_markers = []
-        month_lines = []
-        current_month = None
-        
-        # Add January at the very beginning if we have week 1
-        if len(unique_weeks) > 0 and unique_weeks[0] <= 4:
-            month_markers.append(dict(
-                x=f"W{int(unique_weeks[0]):02d}",
-                y=1.02,  # Position above the chart
-                xref="x",
-                yref="paper",
-                text=f"<b>Jan</b>",
-                showarrow=False,
-                font=dict(size=11, color="#64748b", family="Inter"),
-                xanchor="left"
-            ))
-            current_month = "Jan"
-        
-        for i, week in enumerate(unique_weeks):
-            month = week_to_month(week)
-            if month != current_month and i > 0:  # Don't add line at the very beginning
-                # Add vertical line to separate months
-                month_lines.append(dict(
-                    type="line",
-                    x0=f"W{int(week):02d}",
-                    y0=0,
-                    x1=f"W{int(week):02d}",
-                    y1=1,
-                    xref="x",
-                    yref="paper",
-                    line=dict(color="rgba(128,128,128,0.3)", width=1, dash="dot")
-                ))
-                
-                # Add month label at the top
-                month_markers.append(dict(
-                    x=f"W{int(week):02d}",
-                    y=1.02,  # Position above the chart
-                    xref="x",
-                    yref="paper",
-                    text=f"<b>{month}</b>",
-                    showarrow=False,
-                    font=dict(size=11, color="#64748b", family="Inter"),
-                    xanchor="left"
-                ))
-            current_month = month
-        
-        # Enable unified hover mode and add month annotations
+        # Enable unified hover mode (no month annotations or separator lines)
         fig_trends.update_layout(
-            height=520,  # Slightly taller to accommodate month labels
+            height=520,
             xaxis_tickangle=45,
-            hovermode='x unified',  # This shows all series data in one tooltip
-            xaxis_title="Week",
+            hovermode='x unified',
+            xaxis_title="Week (Saturday-Friday)",
             yaxis_title=y_axis_title,
-            annotations=month_markers,
-            shapes=month_lines,  # Add the month separator lines
             xaxis=dict(
                 tickmode='linear',
-                dtick=2,  # Show every 2nd week to avoid crowding
+                dtick=2,
                 showgrid=True,
                 gridcolor='rgba(128,128,128,0.2)',
-                domain=[0, 1]  # Full width for x-axis
+                domain=[0, 1]
             ),
             yaxis=dict(
                 range=y_axis_range,
@@ -654,8 +763,17 @@ def display_tab(df, available_years, default_years):
                 showgrid=True,
                 gridcolor='rgba(128,128,128,0.2)',
             ),
-            margin=dict(t=80, b=60, l=60, r=60),  # Extra top margin for month labels
-            font=dict(family="Inter", color="#f0f6fc")  # Light font for dark theme
+            margin=dict(t=60, b=60, l=60, r=60),
+            font=dict(family="Inter", color="#f0f6fc"),
+            # Optimize legend for listing breakdown mode
+            legend=dict(
+                orientation="h" if listing_breakdown else "v",  # Horizontal legend for listing breakdown
+                yanchor="bottom" if listing_breakdown else "top",
+                y=1.02 if listing_breakdown else 1,
+                xanchor="left" if listing_breakdown else "right",
+                x=0 if listing_breakdown else 1,
+                font=dict(size=10 if listing_breakdown else 12)  # Smaller text for listing mode
+            ) if listing_breakdown else dict()
         )
         
         st.plotly_chart(fig_trends, use_container_width=True)
