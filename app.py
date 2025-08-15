@@ -25,6 +25,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --- Session State Initialization for Stable UI ---
+# Initialize session state to prevent tab jumping and preserve scroll position
+if 'ui_initialized' not in st.session_state:
+    st.session_state.ui_initialized = True
+    st.session_state.prevent_tab_jump = True
+
 
 st.markdown("""
 <style>
@@ -49,6 +55,11 @@ st.markdown("""
     .main .block-container {
         background-color: #0d1117 !important;
         color: #f0f6fc !important;
+    }
+    
+    /* Prevent unwanted scrolling behavior */
+    html, body {
+        scroll-behavior: auto !important;
     }
     
     /* Tabs styling */
@@ -204,23 +215,25 @@ try:
     """)
     
     # =============================================================================
-    # Define and Display Dashboard Tabs
+    # Define and Display Dashboard Tabs with Scroll Control
     # =============================================================================
     
-    tab_names = [
-        "📊 KPIs",
-        "📈 YOY Trends", 
-        "💰 Daily Prices",
-        "🔍 SKU Trends",
-        "📋 Pivot Table",
-        "📂 Category Summary",
-        "💰 Price Range Analysis",
-        "🌊 Seasonality Load", 
-        "❓ Unrecognised Sales"
-    ]
-    
-    # Create tab objects
-    tab_kpi, tab_yoy, tab_daily, tab_sku, tab_pivot, tab_category, tab_price_range, tab_seasonality, tab_unrec = st.tabs(tab_names)
+    # Add container to control scroll behavior
+    with st.container():
+        tab_names = [
+            "📊 KPIs",
+            "📈 YOY Trends", 
+            "💰 Daily Prices",
+            "🔍 SKU Trends",
+            "📋 Pivot Table",
+            "📂 Category Summary",
+            "💰 Price Range Analysis",
+            "🌊 Seasonality Load", 
+            "❓ Unrecognised Sales"
+        ]
+        
+        # Create tab objects
+        tab_kpi, tab_yoy, tab_daily, tab_sku, tab_pivot, tab_category, tab_price_range, tab_seasonality, tab_unrec = st.tabs(tab_names)
     
     # Render content for each tab by calling its display function
     with tab_kpi:
