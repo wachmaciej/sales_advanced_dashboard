@@ -275,3 +275,101 @@ def load_targets_from_gsheet():
         st.error(f"Error loading targets data: {e}")
         return None
 
+
+@st.cache_data(ttl=18000, show_spinner="Loading PPC data from Google Sheet...")
+def load_ppc_data_from_gsheet(country="US"):
+    """Loads PPC data from the new Google Sheet for the specified country.
+    
+    Args:
+        country (str): Country code for the worksheet (US, UK, CA, MX, DE, ES, IT, FR)
+    
+    Returns:
+        pd.DataFrame: DataFrame containing PPC data for the specified country
+    """
+    
+    try:
+        # --- Authentication (same as main function) ---
+        creds = None
+        secrets_used = False
+
+        try:
+            if hasattr(st, 'secrets') and "gcp_service_account" in st.secrets:
+                creds_json_dict = dict(st.secrets["gcp_service_account"])
+                creds = Credentials.from_service_account_info(creds_json_dict, scopes=SCOPES)
+                secrets_used = True
+            else:
+                if os.path.exists(LOCAL_KEY_PATH):
+                    creds = Credentials.from_service_account_file(LOCAL_KEY_PATH, scopes=SCOPES)
+                else:
+                    st.error("No valid authentication found for Google Sheets. Check secrets or local key file.")
+                    return pd.DataFrame()
+        except Exception as auth_error:
+            st.error(f"Authentication error: {auth_error}")
+            return pd.DataFrame()
+
+        # --- Open New Sheet ---
+        client = gspread.authorize(creds)
+        
+        # Get new sheet URL from secrets
+        try:
+            new_sheet_url = st.secrets["new_google_sheet_url"]
+            sheet_key = extract_sheet_key(new_sheet_url)
+            
+            if not sheet_key:
+                st.error("Could not extract sheet key from new_google_sheet_url")
+                return pd.DataFrame()
+                
+            spreadsheet = client.open_by_key(sheet_key)
+            
+        except KeyError:
+            st.error("'new_google_sheet_url' not found in secrets.toml")
+            return pd.DataFrame()
+        except gspread.exceptions.SpreadsheetNotFound:
+            st.error(f"New Google Sheet not found or not shared with service account")
+            return pd.DataFrame()
+        
+        # --- Open Country Worksheet ---
+        try:
+            worksheet = spreadsheet.worksheet(country)
+        except gspread.exceptions.WorksheetNotFound:
+            available_sheets = [ws.title for ws in spreadsheet.worksheets()]
+            st.error(f"Worksheet '{country}' not found. Available sheets: {available_sheets}")
+            return pd.DataFrame()
+        
+        # --- Read and Process Data ---
+        data = worksheet.get_all_values()
+        if not data or len(data) < 2:
+            st.warning(f"No data found in worksheet '{country}' or only headers present.")
+            return pd.DataFrame()
+
+        headers = data.pop(0)
+        df = pd.DataFrame(data, columns=headers)
+        
+        # Clean empty strings and convert to appropriate types
+        df = df.replace('', pd.NA)
+        
+        # Convert numeric columns (assuming standard PPC metrics)
+        numeric_columns = ['Sessions', 'Page Views', 'Impressions', 'Clicks', 'Ad Purchases', 
+                          'Ad Units Sold', 'Ad Spend', 'Ad Sales', 'Total Sales', 
+                          'Total Units Ordered', 'Total Ordered Items % Ad Sales', 
+                          '% Ad Orders', 'Avg Order Value', 'Avg Units Per Order', 
+                          'Organic Sales', 'Organic Orders', 'Ads CTR', 'ACOS', 
+                          'TACOS', 'CPC', 'CPA']
+        
+        for col in numeric_columns:
+            if col in df.columns:
+                # Clean currency symbols and convert to numeric
+                df[col] = df[col].astype(str).str.replace(r'[£$,]', '', regex=True).str.strip()
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Convert date column
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error loading PPC data for {country}: {e}")
+        st.error(traceback.format_exc())
+        return pd.DataFrame()
+
