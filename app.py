@@ -15,7 +15,8 @@ from processing import preprocess_data # Assuming this file exists and is correc
 from tabs import kpi, yoy_trends, daily_prices, sku_trends, pivot_table, unrecognised_sales
 from tabs import seasonality_load
 from tabs import category_summary 
-from tabs import price_range_analysis 
+from tabs import price_range_analysis
+from tabs import ppc_analytics 
 
 # --- Page Config ---
 st.set_page_config(
@@ -225,15 +226,16 @@ try:
             "📈 YOY Trends", 
             "💰 Daily Prices",
             "🔍 SKU Trends",
-            "📋 Pivot Table",
+            "🎯 PPC Analytics",
             "📂 Category Summary",
             "💰 Price Range Analysis",
             "🌊 Seasonality Load", 
+            "📋 Pivot Table",
             "❓ Unrecognised Sales"
         ]
         
         # Create tab objects
-        tab_kpi, tab_yoy, tab_daily, tab_sku, tab_pivot, tab_category, tab_price_range, tab_seasonality, tab_unrec = st.tabs(tab_names)
+        tab_kpi, tab_yoy, tab_daily, tab_sku, tab_ppc, tab_category, tab_price_range, tab_seasonality, tab_pivot, tab_unrec = st.tabs(tab_names)
     
     # Render content for each tab by calling its display function
     with tab_kpi:
@@ -248,8 +250,8 @@ try:
     with tab_sku:
         sku_trends.display_tab(df, available_custom_years, yoy_default_years)
     
-    with tab_pivot:
-        pivot_table.display_tab(df, available_custom_years, default_current_year)
+    with tab_ppc:
+        ppc_analytics.display_tab()
     
     with tab_category:
         category_summary.display_tab(df, available_custom_years, yoy_default_years)
@@ -259,6 +261,9 @@ try:
     
     with tab_seasonality:
         seasonality_load.display_tab(df, available_custom_years)
+    
+    with tab_pivot:
+        pivot_table.display_tab(df, available_custom_years, default_current_year)
     
     with tab_unrec:
         unrecognised_sales.display_tab(df)
