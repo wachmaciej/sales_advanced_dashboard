@@ -102,18 +102,23 @@ def display_tab():
         df_ppc = df_ppc.dropna(subset=[date_col])
         
         if not df_ppc.empty:
+            # Calculate the last 30 days of available data
+            max_date = df_ppc[date_col].max()
+            # Default to last 30 days of available data
+            default_start_date = max_date - pd.Timedelta(days=29)
+            
             col1, col2 = st.columns(2)
             with col1:
                 start_date = st.date_input(
                     "Start Date",
-                    value=df_ppc[date_col].min().date(),
+                    value=default_start_date.date(),
                     min_value=df_ppc[date_col].min().date(),
                     max_value=df_ppc[date_col].max().date()
                 )
             with col2:
                 end_date = st.date_input(
                     "End Date", 
-                    value=df_ppc[date_col].max().date(),
+                    value=max_date.date(),
                     min_value=df_ppc[date_col].min().date(),
                     max_value=df_ppc[date_col].max().date()
                 )
