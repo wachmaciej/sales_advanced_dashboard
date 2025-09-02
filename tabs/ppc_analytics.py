@@ -104,23 +104,24 @@ def display_tab():
         if not df_ppc.empty:
             # Calculate the last 30 days of available data
             max_date = df_ppc[date_col].max()
-            # Default to last 30 days of available data
-            default_start_date = max_date - pd.Timedelta(days=29)
+            min_date = df_ppc[date_col].min()
+            # Default to last 30 days of available data, but ensure it doesn't go below min_date
+            default_start_date = max(max_date - pd.Timedelta(days=29), min_date)
             
             col1, col2 = st.columns(2)
             with col1:
                 start_date = st.date_input(
                     "Start Date",
                     value=default_start_date.date(),
-                    min_value=df_ppc[date_col].min().date(),
-                    max_value=df_ppc[date_col].max().date()
+                    min_value=min_date.date(),
+                    max_value=max_date.date()
                 )
             with col2:
                 end_date = st.date_input(
                     "End Date", 
                     value=max_date.date(),
-                    min_value=df_ppc[date_col].min().date(),
-                    max_value=df_ppc[date_col].max().date()
+                    min_value=min_date.date(),
+                    max_value=max_date.date()
                 )
             
             # Filter data by date range
