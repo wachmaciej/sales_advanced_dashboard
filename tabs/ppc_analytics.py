@@ -139,106 +139,219 @@ def display_tab():
         st.warning("No data available for the selected date range.")
         return
     
-    # Last completed week metrics (Saturday to Friday)
+    # Last 7 days metrics with Week-over-Week comparison
     st.markdown("---")
-    st.subheader("📅 Last Completed Week Performance (Saturday - Friday)")
+    st.subheader("📅 Last 7 Days Performance vs Previous Week")
     
-    # Calculate last completed week
+    # Calculate last 7 days and previous 7 days for comparison
     if date_col:
-        # Use original dataframe for week calculations
+        # Use original dataframe for 7-day calculations
         df_week_calc = df_ppc.dropna(subset=[date_col]).copy()
         
         if not df_week_calc.empty:
-            # Find the most recent Friday
-            today = pd.Timestamp.now()
-            # Friday is weekday 4, calculate days since last Friday
-            days_since_friday = (today.weekday() - 4) % 7
-            if days_since_friday == 0 and today.hour < 23:  # If today is Friday but not end of day
-                days_since_friday = 7
-            most_recent_friday = today - pd.Timedelta(days=days_since_friday)
+            # Get the most recent date in the data and calculate periods
+            most_recent_date = df_week_calc[date_col].max()
+            seven_days_ago = most_recent_date - pd.Timedelta(days=6)  # Current week start
+            fourteen_days_ago = most_recent_date - pd.Timedelta(days=13)  # Previous week start
             
-            # Calculate the Saturday-Friday week
-            week_start = most_recent_friday - pd.Timedelta(days=6)  # Saturday (6 days before Friday)
-            week_end = most_recent_friday
-            
-            # Filter data for last completed week
-            last_week_data = df_week_calc[
-                (df_week_calc[date_col].dt.date >= week_start.date()) & 
-                (df_week_calc[date_col].dt.date <= week_end.date())
+            # Filter data for last 7 days (current week)
+            last_7_days_data = df_week_calc[
+                (df_week_calc[date_col] >= seven_days_ago) & 
+                (df_week_calc[date_col] <= most_recent_date)
             ]
             
-            week_start_str = week_start.strftime('%b %d')
-            week_end_str = week_end.strftime('%b %d, %Y')
-            st.caption(f"📆 **Week Period**: {week_start_str} - {week_end_str} (Saturday to Friday)")
+            # Filter data for previous 7 days (previous week)
+            prev_7_days_data = df_week_calc[
+                (df_week_calc[date_col] >= fourteen_days_ago) & 
+                (df_week_calc[date_col] < seven_days_ago)
+            ]
             
-            if not last_week_data.empty:
-                week_cols = st.columns(8)  # Changed from 6 to 8 columns to accommodate ACOS and TACOS
+            start_str = seven_days_ago.strftime('%b %d')
+            end_str = most_recent_date.strftime('%b %d, %Y')
+            prev_start_str = fourteen_days_ago.strftime('%b %d')
+            prev_end_str = (seven_days_ago - pd.Timedelta(days=1)).strftime('%b %d')
+            
+            st.caption(f"📆 **Current**: {start_str} - {end_str} | **Previous**: {prev_start_str} - {prev_end_str}")
+            
+            if not last_7_days_data.empty:
+                # Helper function to calculate percentage change
+                def calc_change(current, previous):
+                    if pd.isna(previous) or previous == 0:
+                        return None
+                    return ((current - previous) / previous) * 100
                 
-                # Week Ad Spend
-                if 'Ad Spend' in last_week_data.columns:
-                    week_ad_spend = pd.to_numeric(last_week_data['Ad Spend'], errors='coerce').sum()
+                week_cols = st.columns(10)  # Increased to 10 columns for Sessions and Page Views
+                
+                # 7-Day Ad Spend
+                if 'Ad Spend' in last_7_days_data.columns:
+                    current_spend = pd.to_numeric(last_7_days_data['Ad Spend'], errors='coerce').sum()
+                    prev_spend = pd.to_numeric(prev_7_days_data['Ad Spend'], errors='coerce').sum() if not prev_7_days_data.empty else 0
+                    spend_change = calc_change(current_spend, prev_spend)
+                    
                     with week_cols[0]:
                         if currency_symbol == "Mixed":
-                            st.metric("Week Ad Spend", f"{week_ad_spend:,.0f} (Mixed)", help="Total spend for last completed week across all marketplaces")
+                            st.metric("7-Day Ad Spend", f"{current_spend:,.0f} (Mixed)", 
+                                    delta=f"{spend_change:+.1f}%" if spend_change is not None else None,
+                                    help="Total spend for last 7 days vs previous 7 days")
                         else:
-                            st.metric("Week Ad Spend", f"{currency_symbol}{week_ad_spend:,.0f}", help="Total spend for last completed week")
+                            st.metric("7-Day Ad Spend", f"{currency_symbol}{current_spend:,.0f}", 
+                                    delta=f"{spend_change:+.1f}%" if spend_change is not None else None,
+                                    help="Total spend for last 7 days vs previous 7 days")
                 
-                # Week Ad Sales
-                if 'Ad Sales' in last_week_data.columns:
-                    week_ad_sales = pd.to_numeric(last_week_data['Ad Sales'], errors='coerce').sum()
+                # 7-Day Ad Sales
+                if 'Ad Sales' in last_7_days_data.columns:
+                    current_ad_sales = pd.to_numeric(last_7_days_data['Ad Sales'], errors='coerce').sum()
+                    prev_ad_sales = pd.to_numeric(prev_7_days_data['Ad Sales'], errors='coerce').sum() if not prev_7_days_data.empty else 0
+                    ad_sales_change = calc_change(current_ad_sales, prev_ad_sales)
+                    
                     with week_cols[1]:
                         if currency_symbol == "Mixed":
-                            st.metric("Week Ad Sales", f"{week_ad_sales:,.0f} (Mixed)", help="Total ad sales for last completed week across all marketplaces")
+                            st.metric("7-Day Ad Sales", f"{current_ad_sales:,.0f} (Mixed)", 
+                                    delta=f"{ad_sales_change:+.1f}%" if ad_sales_change is not None else None,
+                                    help="Total ad sales for last 7 days vs previous 7 days")
                         else:
-                            st.metric("Week Ad Sales", f"{currency_symbol}{week_ad_sales:,.0f}", help="Total ad sales for last completed week")
+                            st.metric("7-Day Ad Sales", f"{currency_symbol}{current_ad_sales:,.0f}", 
+                                    delta=f"{ad_sales_change:+.1f}%" if ad_sales_change is not None else None,
+                                    help="Total ad sales for last 7 days vs previous 7 days")
                 
-                # Week Total Sales
-                if 'Total Sales' in last_week_data.columns:
-                    week_total_sales = pd.to_numeric(last_week_data['Total Sales'], errors='coerce').sum()
+                # 7-Day Total Sales
+                if 'Total Sales' in last_7_days_data.columns:
+                    current_total_sales = pd.to_numeric(last_7_days_data['Total Sales'], errors='coerce').sum()
+                    prev_total_sales = pd.to_numeric(prev_7_days_data['Total Sales'], errors='coerce').sum() if not prev_7_days_data.empty else 0
+                    total_sales_change = calc_change(current_total_sales, prev_total_sales)
+                    
                     with week_cols[2]:
                         if currency_symbol == "Mixed":
-                            st.metric("Week Total Sales", f"{week_total_sales:,.0f} (Mixed)", help="Total sales for last completed week across all marketplaces")
+                            st.metric("7-Day Total Sales", f"{current_total_sales:,.0f} (Mixed)", 
+                                    delta=f"{total_sales_change:+.1f}%" if total_sales_change is not None else None,
+                                    help="Total sales for last 7 days vs previous 7 days")
                         else:
-                            st.metric("Week Total Sales", f"{currency_symbol}{week_total_sales:,.0f}", help="Total sales for last completed week")
+                            st.metric("7-Day Total Sales", f"{currency_symbol}{current_total_sales:,.0f}", 
+                                    delta=f"{total_sales_change:+.1f}%" if total_sales_change is not None else None,
+                                    help="Total sales for last 7 days vs previous 7 days")
                 
-                # Week Avg % Ad Sales
-                if '% Ad Sales' in last_week_data.columns:
-                    week_avg_ad_sales_pct = pd.to_numeric(last_week_data['% Ad Sales'], errors='coerce').mean()
+                # 7-Day Avg % Ad Sales
+                if '% Ad Sales' in last_7_days_data.columns:
+                    current_ad_sales_pct = pd.to_numeric(last_7_days_data['% Ad Sales'], errors='coerce').mean()
+                    prev_ad_sales_pct = pd.to_numeric(prev_7_days_data['% Ad Sales'], errors='coerce').mean() if not prev_7_days_data.empty else 0
+                    ad_sales_pct_change = current_ad_sales_pct - prev_ad_sales_pct if not pd.isna(prev_ad_sales_pct) else None
+                    
                     with week_cols[3]:
-                        st.metric("Week Avg % Ad Sales", f"{week_avg_ad_sales_pct:.1f}%" if not pd.isna(week_avg_ad_sales_pct) else "N/A", 
-                                 help="Average % ad sales for last completed week")
+                        st.metric("7-Day Avg % Ad Sales", f"{current_ad_sales_pct:.1f}%" if not pd.isna(current_ad_sales_pct) else "N/A", 
+                                delta=f"{ad_sales_pct_change:+.1f}pp" if ad_sales_pct_change is not None else None,
+                                help="Average % ad sales for last 7 days vs previous 7 days")
                 
-                # Week Clicks
-                if 'Clicks' in last_week_data.columns:
-                    week_clicks = pd.to_numeric(last_week_data['Clicks'], errors='coerce').sum()
+                # 7-Day Clicks
+                if 'Clicks' in last_7_days_data.columns:
+                    current_clicks = pd.to_numeric(last_7_days_data['Clicks'], errors='coerce').sum()
+                    prev_clicks = pd.to_numeric(prev_7_days_data['Clicks'], errors='coerce').sum() if not prev_7_days_data.empty else 0
+                    clicks_change = calc_change(current_clicks, prev_clicks)
+                    
                     with week_cols[4]:
-                        st.metric("Week Clicks", f"{week_clicks:,.0f}", help="Total clicks for last completed week")
+                        st.metric("7-Day Clicks", f"{current_clicks:,.0f}", 
+                                delta=f"{clicks_change:+.1f}%" if clicks_change is not None else None,
+                                help="Total clicks for last 7 days vs previous 7 days")
                 
-                # Week Impressions
-                if 'Impressions' in last_week_data.columns:
-                    week_impressions = pd.to_numeric(last_week_data['Impressions'], errors='coerce').sum()
+                # 7-Day Impressions
+                if 'Impressions' in last_7_days_data.columns:
+                    current_impressions = pd.to_numeric(last_7_days_data['Impressions'], errors='coerce').sum()
+                    prev_impressions = pd.to_numeric(prev_7_days_data['Impressions'], errors='coerce').sum() if not prev_7_days_data.empty else 0
+                    impressions_change = calc_change(current_impressions, prev_impressions)
+                    
                     with week_cols[5]:
-                        st.metric("Week Impressions", f"{week_impressions:,.0f}", help="Total impressions for last completed week")
+                        st.metric("7-Day Impressions", f"{current_impressions:,.0f}", 
+                                delta=f"{impressions_change:+.1f}%" if impressions_change is not None else None,
+                                help="Total impressions for last 7 days vs previous 7 days")
                 
-                # Week Average ACOS
-                if 'ACOS' in last_week_data.columns:
-                    week_avg_acos = pd.to_numeric(last_week_data['ACOS'], errors='coerce').mean()
+                # 7-Day Average ACOS
+                if 'ACOS' in last_7_days_data.columns:
+                    current_acos = pd.to_numeric(last_7_days_data['ACOS'], errors='coerce').mean()
+                    prev_acos = pd.to_numeric(prev_7_days_data['ACOS'], errors='coerce').mean() if not prev_7_days_data.empty else 0
+                    acos_change = current_acos - prev_acos if not pd.isna(prev_acos) else None
+                    
                     with week_cols[6]:
-                        st.metric("Week Avg ACOS", f"{week_avg_acos:.1f}%" if not pd.isna(week_avg_acos) else "N/A",
-                                 help="Average ACOS for last completed week")
+                        st.metric("7-Day Avg ACOS", f"{current_acos:.1f}%" if not pd.isna(current_acos) else "N/A",
+                                delta=f"{acos_change:+.1f}pp" if acos_change is not None else None,
+                                delta_color="inverse",  # Lower ACOS is better
+                                help="Average ACOS for last 7 days vs previous 7 days")
                 
-                # Week Average TACOS
-                if 'TACOS' in last_week_data.columns:
-                    week_avg_tacos = pd.to_numeric(last_week_data['TACOS'], errors='coerce').mean()
+                # 7-Day Average TACOS
+                if 'TACOS' in last_7_days_data.columns:
+                    current_tacos = pd.to_numeric(last_7_days_data['TACOS'], errors='coerce').mean()
+                    prev_tacos = pd.to_numeric(prev_7_days_data['TACOS'], errors='coerce').mean() if not prev_7_days_data.empty else 0
+                    tacos_change = current_tacos - prev_tacos if not pd.isna(prev_tacos) else None
+                    
                     with week_cols[7]:
-                        st.metric("Week Avg TACOS", f"{week_avg_tacos:.1f}%" if not pd.isna(week_avg_tacos) else "N/A",
-                                 help="Average TACOS for last completed week")
+                        st.metric("7-Day Avg TACOS", f"{current_tacos:.1f}%" if not pd.isna(current_tacos) else "N/A",
+                                delta=f"{tacos_change:+.1f}pp" if tacos_change is not None else None,
+                                delta_color="inverse",  # Lower TACOS is better
+                                help="Average TACOS for last 7 days vs previous 7 days")
+                
+                # 7-Day Sessions (with 2-day delay adjustment)
+                if 'Sessions' in df_week_calc.columns:
+                    # Adjust dates for Sessions data (2 days behind)
+                    sessions_current_end = most_recent_date - pd.Timedelta(days=2)  # 2 days behind
+                    sessions_current_start = sessions_current_end - pd.Timedelta(days=6)  # 7-day window
+                    sessions_prev_end = sessions_current_start - pd.Timedelta(days=1)
+                    sessions_prev_start = sessions_prev_end - pd.Timedelta(days=6)
+                    
+                    # Filter data for Sessions (current period)
+                    sessions_current_data = df_week_calc[
+                        (df_week_calc[date_col] >= sessions_current_start) & 
+                        (df_week_calc[date_col] <= sessions_current_end)
+                    ]
+                    
+                    # Filter data for Sessions (previous period)
+                    sessions_prev_data = df_week_calc[
+                        (df_week_calc[date_col] >= sessions_prev_start) & 
+                        (df_week_calc[date_col] <= sessions_prev_end)
+                    ]
+                    
+                    current_sessions = pd.to_numeric(sessions_current_data['Sessions'], errors='coerce').sum()
+                    prev_sessions = pd.to_numeric(sessions_prev_data['Sessions'], errors='coerce').sum() if not sessions_prev_data.empty else 0
+                    sessions_change = calc_change(current_sessions, prev_sessions)
+                    
+                    with week_cols[8]:
+                        sessions_end_str = sessions_current_end.strftime('%m/%d')
+                        st.metric("7-Day Sessions", f"{current_sessions:,.0f}", 
+                                delta=f"{sessions_change:+.1f}%" if sessions_change is not None else None,
+                                help=f"Sessions for 7 days ending {sessions_end_str} (2-day delay)")
+                
+                # 7-Day Page Views (with 2-day delay adjustment)
+                if 'Page Views' in df_week_calc.columns:
+                    # Adjust dates for Page Views data (2 days behind) - same as Sessions
+                    pageviews_current_end = most_recent_date - pd.Timedelta(days=2)  # 2 days behind
+                    pageviews_current_start = pageviews_current_end - pd.Timedelta(days=6)  # 7-day window
+                    pageviews_prev_end = pageviews_current_start - pd.Timedelta(days=1)
+                    pageviews_prev_start = pageviews_prev_end - pd.Timedelta(days=6)
+                    
+                    # Filter data for Page Views (current period)
+                    pageviews_current_data = df_week_calc[
+                        (df_week_calc[date_col] >= pageviews_current_start) & 
+                        (df_week_calc[date_col] <= pageviews_current_end)
+                    ]
+                    
+                    # Filter data for Page Views (previous period)
+                    pageviews_prev_data = df_week_calc[
+                        (df_week_calc[date_col] >= pageviews_prev_start) & 
+                        (df_week_calc[date_col] <= pageviews_prev_end)
+                    ]
+                    
+                    current_pageviews = pd.to_numeric(pageviews_current_data['Page Views'], errors='coerce').sum()
+                    prev_pageviews = pd.to_numeric(pageviews_prev_data['Page Views'], errors='coerce').sum() if not pageviews_prev_data.empty else 0
+                    pageviews_change = calc_change(current_pageviews, prev_pageviews)
+                    
+                    with week_cols[9]:
+                        pageviews_end_str = pageviews_current_end.strftime('%m/%d')
+                        st.metric("7-Day Page Views", f"{current_pageviews:,.0f}", 
+                                delta=f"{pageviews_change:+.1f}%" if pageviews_change is not None else None,
+                                help=f"Page Views for 7 days ending {pageviews_end_str} (2-day delay)")
             else:
-                st.warning(f"No data found for last completed week ({week_start_str} - {week_end_str})")
+                st.warning(f"No data found for last 7 days ({start_str} - {end_str})")
         else:
-            st.warning("No valid date data found for week calculations")
+            st.warning("No valid date data found for 7-day calculations")
     else:
-        st.warning("Date column not available for week calculations")
+        st.warning("Date column not available for 7-day calculations")
     
     # Charts section
     st.markdown("---")
