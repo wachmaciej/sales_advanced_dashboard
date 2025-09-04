@@ -426,14 +426,50 @@ def display_tab(df, available_years, default_years):
                 if prev_1wk_col in row and row[prev_1wk_col] != 0 else
                 (100.0 if "Last Week Diff" in row and row["Last Week Diff"] > 0 else 0.0), axis=1)
 
-            # Calculate Current Week % Change (compared to Last Completed Week)
-            if current_week_col in revenue_summary.columns and current_1wk_col in revenue_summary.columns:
-                revenue_summary["Current Week % Change"] = revenue_summary.apply(
-                    lambda row: ((row[current_week_col] / row[current_1wk_col]) - 1) * 100 # Formula: ((curr/prev)-1)*100
-                    if row[current_1wk_col] != 0 else
-                    (100.0 if row[current_week_col] > 0 else 0.0), axis=1) # Handle division by zero
-            else:
-                revenue_summary["Current Week % Change"] = 0.0 # Default if columns missing
+            # Calculate Current Week % Change (compared to same week in previous year, same days elapsed)
+            revenue_summary["Current Week % Change"] = 0.0  # Default
+            
+            # Only calculate if we have current week data and can determine the comparison period
+            if (current_week_number is not None and 'current_week_data' in locals() and not current_week_data.empty and 
+                'current_week_col' in locals() and current_week_col in revenue_summary.columns):
+                
+                # Find the same week number in the previous year
+                comparison_year = filtered_current_year - 1  # Previous year
+                df_comparison_year = filtered_df_summary[filtered_df_summary[CUSTOM_YEAR_COL] == comparison_year].copy()
+                
+                if not df_comparison_year.empty:
+                    # Find data for the same week number in the previous year
+                    same_week_prev_year = df_comparison_year[df_comparison_year[WEEK_AS_INT_COL] == current_week_number].copy()
+                    
+                    if not same_week_prev_year.empty:
+                        # Calculate revenue for the same week in previous year (full week as approximation)
+                        prev_year_same_week_revenue = (same_week_prev_year
+                                                      .groupby(grouping_key)[SALES_VALUE_GBP_COL].sum())
+                        
+                        # Convert to dictionary for safer access
+                        prev_year_revenue_dict = prev_year_same_week_revenue.to_dict()
+                        
+                        # Calculate YoY changes
+                        yoy_changes = []
+                        
+                        for idx, row in revenue_summary.iterrows():
+                            try:
+                                # The grouping_key is actually the index, not a column!
+                                item_key = idx  # Use the index instead of row[grouping_key]
+                                current_revenue = row[current_week_col]
+                                prev_year_revenue = prev_year_revenue_dict.get(item_key, 0)
+                                
+                                if prev_year_revenue != 0 and current_revenue != 0:
+                                    change = ((current_revenue / prev_year_revenue) - 1) * 100
+                                    yoy_changes.append(change)
+                                else:
+                                    default_val = 100.0 if current_revenue > 0 else 0.0
+                                    yoy_changes.append(default_val)
+                                    
+                            except Exception as e:
+                                yoy_changes.append(0.0)
+                        
+                        revenue_summary["Current Week % Change"] = yoy_changes
 
 
             revenue_summary = revenue_summary.reset_index()
@@ -484,7 +520,44 @@ def display_tab(df, available_years, default_years):
                 if "Last Week % Change" in summary_row:
                     summary_row["Last Week % Change"] = (total_diff_1wk / total_last_week_last_year * 100) if total_last_week_last_year != 0 else (100.0 if total_diff_1wk > 0 else 0.0)
                 if "Current Week % Change" in summary_row:
-                     summary_row["Current Week % Change"] = ((total_current_week_so_far / total_last_week_current) - 1) * 100 if total_last_week_current != 0 else (100.0 if total_current_week_so_far > 0 else 0.0)
+                    # For total row, calculate YoY comparison using same logic as individual items
+                    # Get total revenue for same period in previous year
+                    comparison_year = filtered_current_year - 1
+                    if (current_week_number is not None and comparison_year in filtered_years_present and 
+                        total_current_week_so_far > 0):
+                        df_comparison_year = filtered_df_summary[filtered_df_summary[CUSTOM_YEAR_COL] == comparison_year]
+                        same_week_prev_year_total = df_comparison_year[df_comparison_year[WEEK_AS_INT_COL] == current_week_number]
+                        
+                        if not same_week_prev_year_total.empty and has_start_date and has_end_date:
+                            # Calculate days elapsed and get same period from previous year
+                            if 'current_week_data' in locals() and not current_week_data.empty:
+                                current_week_start_date = current_week_data[CUSTOM_WEEK_START_COL].iloc[0]
+                                days_elapsed = (today - current_week_start_date).days + 1
+                                
+                                prev_year_week_start = pd.to_datetime(same_week_prev_year_total[CUSTOM_WEEK_START_COL].iloc[0]).date()
+                                prev_year_cutoff_date = prev_year_week_start + datetime.timedelta(days=days_elapsed - 1)
+                                
+                                if 'Date' in df_comparison_year.columns:
+                                    df_comparison_year['Date'] = pd.to_datetime(df_comparison_year['Date'], errors='coerce').dt.date
+                                    same_period_prev_total = df_comparison_year[
+                                        (df_comparison_year[WEEK_AS_INT_COL] == current_week_number) &
+                                        (df_comparison_year['Date'] >= prev_year_week_start) &
+                                        (df_comparison_year['Date'] <= prev_year_cutoff_date)
+                                    ][SALES_VALUE_GBP_COL].sum()
+                                else:
+                                    same_period_prev_total = same_week_prev_year_total[SALES_VALUE_GBP_COL].sum()
+                                
+                                summary_row["Current Week % Change"] = (
+                                    ((total_current_week_so_far / same_period_prev_total) - 1) * 100
+                                    if same_period_prev_total != 0 else 
+                                    (100.0 if total_current_week_so_far > 0 else 0.0)
+                                )
+                            else:
+                                summary_row["Current Week % Change"] = 0.0
+                        else:
+                            summary_row["Current Week % Change"] = 100.0 if total_current_week_so_far > 0 else 0.0
+                    else:
+                        summary_row["Current Week % Change"] = 100.0 if total_current_week_so_far > 0 else 0.0
 
 
                 # Create Total DataFrame using the corrected summary_row
